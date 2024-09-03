@@ -1,0 +1,860 @@
+---
+title: "PhoenixEffectMortality"
+author: "Katelyn Jones"
+date: "2024-04-07"
+output: html_document
+---
+
+This code analyzes data from quantitatively scored mortality images for Porites compressa at Kane'ohe Bay, HI, USA from 2015 to 2022. These corals experienced two marine heatwaves in 2015 and 2019 and were marked as bleaching susceptible in 2015. Gaps in the time series within each colony tag are due to either a lost colony (from overgrowth/coverage of the tag or limitations in accessing the reef area) or poor image quality/clarity. The goal of this code is to track the specific mortality of each colony over time and observe if the Phoenix Effect takes place in these resilient corals. 
+
+- ROI = Region of Interest
+- TotalArea and DeadArea both have the units of pixels squared
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Libraries
+```{r}
+library(tidyverse)
+library(car)
+library(emmeans)
+library(DHARMa)
+library(MuMIn)
+library(lubridate)
+library(knitr)
+library(ezknitr)
+library(Rmisc)
+library(lme4)
+library(lmerTest)
+library(readr)
+library(ggpubr)
+library(ggsignif)
+library(RColorBrewer)
+library(zoo)
+library(plotrix)
+```
+
+#Import data
+```{r}
+#Import the csv that contains ROI areas and calculated percentages of dead and alive
+PcomMortality = read.csv("/Users/katelynjones/Box\ Sync/grp-sas-bio-barottlab/Data/KBay\ coral\ pairs\ and\ temp\ time\ series/Phoenix\ Effect/Data\ sheets\ and\ Code/PhoenixEffectMortalityScores_Pcom.csv")
+```
+
+#Pcom
+##Clean data
+```{r}
+#Simplify data sheet to include only relevant information for each timepoint
+
+#First, remove all rows that include NA (represents individual ROIs)
+PcomMortality = na.omit(PcomMortality)
+
+#(For now) remove Colony 81, from PR 4 due to inconsistencies in data
+PcomMortality = subset(PcomMortality, Colony != 81) 
+
+#Also remove 235
+PcomMortality = subset(PcomMortality, Colony != 235) 
+
+#Remove all columns except Colony, Date, Total.Area, Dead.Area, X..Live.Tissue (% Live Tissue)
+PcomMortality = subset(PcomMortality, select = -c(Alive.Dead, ROI, Area, Mean, Min, Max))
+
+#Rename columns 
+colnames(PcomMortality)[3] <- "TotalArea" #Total.Area
+colnames(PcomMortality)[4] <- "DeadArea" #Dead.Area
+colnames(PcomMortality)[5] <- "PercentLiveTissue" #X..Live.Tissue
+
+#Change the Date column from a character to a specific date format
+PcomMortality$Date = as.Date(PcomMortality$Date, "%Y-%m-%d")
+
+#Change ratio to a percent
+PcomMortality$PercentLiveTissue = PcomMortality$PercentLiveTissue*100 
+
+#Round percent to nearest whole number 
+PcomMortality$PercentLiveTissue = round(PcomMortality$PercentLiveTissue, 0)
+
+#Removing unnecessary columns
+PcomMortality = subset(PcomMortality, select = -c(TotalArea, DeadArea))
+```
+
+##[Removed] Consolidate time points
+```{r}
+#Creating new columns that contain just the month and the year to begin consolidating time points
+#PcomMortality$Month <- format(as.Date(PcomMortality$Date, format="%Y/%m/%d"),"%m") #month
+#PcomMortality$Year <- format(as.Date(PcomMortality$Date, format="%Y/%m/%d"),"%Y") #Year
+
+#Rearranging columns to place date indicators next to each other
+#PcomMortality = PcomMortality %>% 
+ # select(-PercentLiveTissue, PercentLiveTissue)
+
+#Combine September 2015 and October 2015
+#oct2015 = PcomMortality %>%
+ # filter(Year == "2015", Month == "09")  #subsets just data points in Sept 2015
+
+#oct2015$Month = "10" #manually changing the month to 10 (October) 
+
+#Remove old Sept 2015 time points
+#PcomMortality = subset(PcomMortality, Date != "2015-09-24")
+
+#unique(PcomMortality$Date)
+
+#Add on new Oct 2015 data points to rest of data set
+#PcomMortality = rbind(PcomMortality,oct2015) #worked
+
+#Create cols with Month and Year
+#cols = c("Month", "Year")
+
+#Combine both columns
+#PcomMortality$NewDate <- do.call(paste, c(PcomMortality[cols], sep="-")) #character format
+
+
+#Once again reorganizing column order to put response variable on the end
+#PcomMortality = PcomMortality %>% 
+ # select(-PercentLiveTissue, PercentLiveTissue)
+
+#Removing Nov 2020, only have data points for 2 colonies, which is repeated in later time points with no difference
+#PcomMortality = subset(PcomMortality, NewDate != "11-2020")
+#unique(PcomMortality$NewDate) #checked that it was successfully removed
+
+#Two colonies were imaged 2x in Oct 2019 - averaging their resulting PercentLiveTissue metric in order to get a singular value for that time point like everyone else
+
+#Subset out individual colonies to summarize mean at each time point, add them back into origianl data set
+#Colony43 = PcomMortality %>%
+ # filter(Colony == 43) #subset colony 43
+
+#Colony243 = PcomMortality %>%
+ # filter(Colony == 243) #subset colony 243
+
+#Summarize mean for each time point
+#Colony43 = aggregate(PercentLiveTissue ~ NewDate, Colony43, mean) #43
+#Colony243 = aggregate(PercentLiveTissue ~ NewDate, Colony243, mean) #243
+
+#Each data frame just has the date and the response variable - add on colony identifier
+#Colony43$Colony = 43
+#Colony243$Colony = 243
+
+#Now just have to match the separate data frames with the original to rbind together into one again
+#Colony43 = Colony43 %>% select(Colony, everything()) #moves colony column to first position
+#Colony243 = Colony243 %>% select(Colony, everything())
+
+#Remove all rows with 43 and 243 from original dataset, then replace with the new (rbind)
+#PcomMortality = subset(PcomMortality, Colony != 43 & Colony != 243)
+#unique(PcomMortality$Colony) #worked
+
+#Remove unecessary columns in mortality
+#PcomMortality = subset(PcomMortality, select = -c(Date, Month, Year))
+
+#PcomMortality = rbind(Colony43, Colony243, PcomMortality)
+#Worked! I removed 2 rows from averaging those October time points. Went from 63 rows to 61.
+
+#unique(PcomMortality$Colony)
+
+#To get mortality to sort in chronological order, I have to change NewDate from character -> Date format. Going to do this by adding in a "dummy" day variable (the first of the month)
+#PcomMortality$NewDate = as.Date(paste("01", PcomMortality$NewDate, sep="-"), "%d-%m-%Y")
+```
+
+
+##Reformat - Table
+```{r}
+table = PcomMortality %>% 
+    pivot_wider(names_from = Colony, values_from = PercentLiveTissue)
+table = dplyr::arrange(table, Date)
+
+write.csv(table, "NewTable.csv")
+
+#Edit: table will now be mortality (%) instead of live tissue (%). I will edit the mortality data frame (in a new version) to be the mortality rather than % live remaining by taking 100 - [value]. 
+
+MortalityTable = PcomMortality %>%
+  mutate(PercentLiveTissue = (PercentLiveTissue-100)*-1) #creates mortality metric
+
+Mortalitytable = MortalityTable %>% 
+    pivot_wider(names_from = Colony, values_from = PercentLiveTissue)
+Mortalitytable = dplyr::arrange(Mortalitytable, Date)
+
+write.csv(Mortalitytable, "MortalityTable.csv")
+
+```
+
+##Plots
+###Mortality over time
+####Overall
+```{r}
+PcomMortality$Colony = as.factor(PcomMortality$Colony)
+
+my_palette = brewer.pal(name = "Set1", n = 9)[1:9]
+
+overall = ggplot(data = PcomMortality, aes(x = Date, y = PercentLiveTissue, color = Colony, group = Colony)) +
+  geom_point(size = 1.25) +
+  geom_line() +
+  #geom_hline(yintercept = 94, linetype = "dashed", color = "darkorange", size = 0.75, alpha = 0.8) +
+  #labs(x = "Date") +
+  labs(x = NULL) + 
+  #labs(y = "Live Tissue (%)") +
+  labs(y = NULL) +
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01","2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  #scale_color_manual(values = my_palette) +
+  scale_color_manual("Colony", values = c("43" = "#ff73b2", "45" = "#9390b7", "225" = "#1982c4", "241" = "#a4e8e6", "243" = "#37542e", "245" = "#9ecc9e", "247" = "#ff8e32")) +
+  scale_fill_manual("Colony", values = c("43" = "#ff73b2", "45" = "#9390b7", "225" = "#1982c4", "241" = "#a4e8e6", "243" = "#37542e", "245" = "#9ecc9e", "247" = "#ff8e32")) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust =.5, hjust = 0.5, size = 11, color = "black"),
+    axis.title.x = element_text(size = 11),
+    #axis.text.y = element_text(size = 12),
+    #axis.title.y = element_text(size = 14,),
+    axis.text.y = element_blank(), 
+    #legend.text = element_text(size = 14),
+    #legend.title = element_text(size = 14),
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+overall
+
+```
+
+####Tag 43
+```{r}
+only43 = subset(PcomMortality, Colony == "43")
+
+tag43 = ggplot(data = only43, aes(x = Date, y = PercentLiveTissue, group = Colony, color = Colony)) +
+  geom_point(size = 1.15) +
+  geom_line(size = 0.8) +
+  geom_area(fill = "#ff73b2", alpha = 0.5) + 
+  #labs(x = "Date") +
+  labs(x = NULL) + 
+  #labs(y = "Live Tissue (%)") +
+  labs(y = NULL) + 
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01", "2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(values = c("43" = "#ff73b2")) +
+  theme_classic() +
+  theme(
+    #axis.text.x = element_text(size = 12), 
+    #axis.title.x = element_text(size = 14),
+    axis.text.x = element_blank(), 
+    axis.text.y = element_text(size = 11,
+                               color = "black"),
+    axis.title.y = element_text(size = 11),
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+tag43
+```
+
+####Tag 45
+```{r}
+only45 = subset(PcomMortality, Colony == "45")
+
+tag45 = ggplot(data = only45, aes(x = Date, y = PercentLiveTissue, group = Colony, color = Colony)) +
+  geom_point(size = 1.15) +
+  geom_line(size = 0.8) +
+  geom_area(fill = "#9390b7", alpha = 0.5) + 
+  #labs(x = "Date") +
+  #labs(y = "Live Tissue (%)") +
+  labs(x = NULL) +
+  labs(y = NULL) +
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01",  "2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(values = c("45" = "#9390b7")) +
+  theme_classic() +
+  theme(
+    #axis.text.x = element_text(size = 12), 
+    #axis.title.x = element_text(size = 14),
+    axis.text.x = element_blank(), 
+    #axis.text.y = element_text(size = 12),
+    #axis.title.y = element_text(size = 14,),
+    axis.text.y = element_blank(), 
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+tag45
+```
+
+####Tag 225
+```{r}
+only225 = subset(PcomMortality, Colony == "225")
+
+tag225 = ggplot(data = only225, aes(x = Date, y = PercentLiveTissue, group = Colony, color = Colony)) +
+  geom_point(size = 1.15) +
+  geom_line(size = 0.8) +
+  geom_area(fill = "#1982c4", alpha = 0.5) + 
+  #labs(x = "Date") +
+  labs(x = NULL) +
+  #labs(y = "Live Tissue (%)") +
+  labs(y = NULL) + 
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01", "2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(values = c("225" = "#1982c4")) +
+  theme_classic() +
+  theme(
+    #axis.text.x = element_text(size = 12), 
+    #axis.title.x = element_text(size = 14),
+    axis.text.x = element_blank(), 
+    #axis.text.y = element_text(size = 12),
+    #axis.title.y = element_text(size = 14,),
+    axis.text.y = element_blank(),
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+tag225
+```
+
+####Tag 241
+```{r}
+only241 = subset(PcomMortality, Colony == "241")
+
+tag241 = ggplot(data = only241, aes(x = Date, y = PercentLiveTissue, group = Colony, color = Colony)) +
+  geom_point(size = 1.15) +
+  geom_line(size = 0.8) +
+  geom_area(fill = "#a4e8e6", alpha = 0.5) + 
+  #labs(x = "Date") +
+  #labs(y = "Live Tissue (%)") +
+  labs(x = NULL) +
+  labs(y = NULL) +
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01", "2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(values = c("241" = "#a4e8e6")) +
+  theme_classic() +
+  theme(
+    #axis.text.x = element_text(size = 12), 
+    #axis.title.x = element_text(size = 14),
+    axis.text.x = element_blank(), 
+    #axis.text.y = element_text(size = 12),
+    #axis.title.y = element_text(size = 14,),
+    axis.text.y = element_blank(),
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+tag241
+```
+
+####Tag 243
+```{r}
+only243 = subset(PcomMortality, Colony == "243")
+
+tag243 = ggplot(data = only243, aes(x = Date, y = PercentLiveTissue, group = Colony, color = Colony)) +
+  geom_point(size = 1.15) +
+  geom_line(size = 0.8) +
+  geom_area(fill = "#37542e", alpha = 0.5) + 
+  #labs(x = "Date") +
+  labs(x = NULL) +
+  #labs(y = "Live Tissue (%)") +
+  labs(y = NULL) + 
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01", "2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(values = c("243" = "#37542e")) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust =.5, hjust = 0.5, size = 11, color = "black"), 
+    #axis.title.x = element_text(size = 14),
+    axis.text.y = element_text(size = 11, color = "black"),
+    axis.title.y = element_text(size = 11),
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+tag243
+```
+
+####Tag 245
+```{r}
+only245 = subset(PcomMortality, Colony == "245")
+
+tag245 = ggplot(data = only245, aes(x = Date, y = PercentLiveTissue, group = Colony, color = Colony)) +
+  geom_point(size = 1.15) +
+  geom_line(size = 0.8) +
+  geom_area(fill = "#9ecc9e", alpha = 0.5) + 
+  #labs(x = "Date") +
+  #labs(y = "Live Tissue (%)") +
+  labs(x = NULL) +
+  labs(y = NULL) +
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01",  "2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(values = c("245" = "#9ecc9e")) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust =.5, hjust = 0.5, size = 11, color = "black"),
+    axis.title.x = element_text(size = 14),
+    #axis.text.x = element_blank(), 
+    #axis.text.y = element_text(size = 12),
+    #axis.title.y = element_text(size = 14,),
+    axis.text.y = element_blank(), 
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+tag245
+```
+
+####Tag 247
+```{r}
+only247 = subset(PcomMortality, Colony == "247")
+
+tag247 = ggplot(data = only247, aes(x = Date, y = PercentLiveTissue, group = Colony, color = Colony)) +
+  geom_point(size = 1.15) +
+  geom_line(size = 0.8) +
+  geom_area(fill = "#ff8e32", alpha = 0.5) + 
+  #labs(x = "Date") +
+  labs(x = NULL) + 
+  #labs(y = "Live Tissue (%)") +
+  labs(y = NULL) +
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01", "2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(values = c("247" = "#ff8e32")) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust =.5, hjust = 0.5, size = 11, color = "black"),
+    #axis.title.x = element_text(size = 14),
+    #axis.text.x = element_blank(), 
+    #axis.text.y = element_text(size = 10),
+    #axis.title.y = element_text(size = 14,),
+    axis.text.y = element_blank(), 
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+tag247
+```
+
+###Grid
+```{r}
+require(grid)
+figure = ggarrange(tag43, tag45, tag225, tag241, tag243, tag245, tag247, overall, ncol = 4, nrow = 2, widths = c(1.5, 1.24, 1.24, 1.24), legend = "none")
+figure
+
+figure = annotate_figure(figure, left = textGrob("Live Tissue (%)", rot = 90, vjust = 0.7, gp = gpar(cex = 1)),
+                    bottom = textGrob("Date", gp = gpar(cex = 1)))
+figure
+
+png("PcomMortality figure.png",
+    width = 6.5,
+    height = 4.5,
+    units = "in",
+    res = 300)
+
+figure
+
+dev.off()
+
+```
+
+###Take two without colors
+####Tag 43 
+```{r}
+tag43 = ggplot(data = only43, aes(x = Date, y = PercentLiveTissue, group = Colony, color = Colony)) +
+  geom_point(size = 1.15) +
+  geom_line(size = 0.8) +
+  geom_area(fill = "#5767be", alpha = 0.5) + 
+  #labs(x = "Date") +
+  labs(x = NULL) + 
+  #labs(y = "Live Tissue (%)") +
+  labs(y = NULL) + 
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01", "2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(values = c("43" = "#5767be")) +
+  theme_classic() +
+  theme(
+    #axis.text.x = element_text(size = 12), 
+    #axis.title.x = element_text(size = 14),
+    axis.text.x = element_blank(), 
+    axis.text.y = element_text(size = 11,
+                               color = "black"),
+    axis.title.y = element_text(size = 11),
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+tag43
+```
+
+####Tag 45
+```{r}
+tag45 = ggplot(data = only45, aes(x = Date, y = PercentLiveTissue, group = Colony, color = Colony)) +
+  geom_point(size = 1.15) +
+  geom_line(size = 0.8) +
+  geom_area(fill = "#5767be", alpha = 0.5) + 
+  #geom_vline(xintercept = as.numeric(as.Date("2015-10-01")), linetype = 2, size = 1.2, alpha = 0.5, color = "red") +
+  #geom_vline(xintercept = as.numeric(as.Date("2019-10-01")), linetype = 2, size = 1.2, alpha = 0.5, color = "red") +
+  #labs(x = "Date") +
+  #labs(y = "Live Tissue (%)") +
+  labs(x = NULL) +
+  labs(y = NULL) +
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01",  "2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(values = c("45" = "#5767be")) +
+  theme_classic() +
+  theme(
+    #axis.text.x = element_text(size = 12), 
+    #axis.title.x = element_text(size = 14),
+    axis.text.x = element_blank(), 
+    #axis.text.y = element_text(size = 12),
+    #axis.title.y = element_text(size = 14,),
+    axis.text.y = element_blank(),
+     #axis.text.y = element_text(size = 11,color = "black"),
+    #axis.title.y = element_text(size = 11),
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+tag45
+```
+
+####Tag 225
+```{r}
+tag225 = ggplot(data = only225, aes(x = Date, y = PercentLiveTissue, group = Colony, color = Colony)) +
+  geom_point(size = 1.15) +
+  geom_line(size = 0.8) +
+  geom_area(fill = "#5767be", alpha = 0.5) + 
+  #geom_vline(xintercept = as.numeric(as.Date("2015-10-01")), linetype = 2, size = 1.2, alpha = 0.5, color = "red") +
+  #geom_vline(xintercept = as.numeric(as.Date("2019-10-01")), linetype = 2, size = 1.2, alpha = 0.5, color = "red") +
+  #labs(x = "Date") +
+  labs(x = NULL) +
+  #labs(y = "Live Tissue (%)") +
+  labs(y = NULL) + 
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01", "2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(values = c("225" = "#5767be")) +
+  theme_classic() +
+  theme(
+    #axis.text.x = element_text(size = 12), 
+    #axis.title.x = element_text(size = 14),
+    axis.text.x = element_blank(), 
+    #axis.text.y = element_text(size = 12),
+    #axis.title.y = element_text(size = 14,),
+    axis.text.y = element_blank(),
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+tag225
+```
+
+####Tag 241
+```{r}
+tag241 = ggplot(data = only241, aes(x = Date, y = PercentLiveTissue, group = Colony, color = Colony)) +
+  geom_point(size = 1.15) +
+  geom_line(size = 0.8) +
+  geom_area(fill = "#5767be", alpha = 0.5) + 
+  #geom_vline(xintercept = as.numeric(as.Date("2015-10-01")), linetype = 2, size = 1.2, alpha = 0.5, color = "red") +
+  #geom_vline(xintercept = as.numeric(as.Date("2019-10-01")), linetype = 2, size = 1.2, alpha = 0.5, color = "red") +
+  #labs(x = "Date") +
+  #labs(y = "Live Tissue (%)") +
+  labs(x = NULL) +
+  labs(y = NULL) +
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01", "2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(values = c("241" = "#5767be")) +
+  theme_classic() +
+  theme(
+    #axis.text.x = element_text(angle = 90, vjust =.5, hjust = 0.5, size = 11, color = "black"),
+    #axis.title.x = element_text(size = 14),
+    axis.text.x = element_blank(), 
+    #axis.text.y = element_text(size = 12),
+    #axis.title.y = element_text(size = 14,),
+    axis.text.y = element_blank(),
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+tag241
+```
+
+####Tag 243
+```{r}
+tag243 = ggplot(data = only243, aes(x = Date, y = PercentLiveTissue, group = Colony, color = Colony)) +
+  geom_point(size = 1.15) +
+  geom_line(size = 0.8) +
+  geom_area(fill = "#5767be", alpha = 0.5) + 
+  #geom_vline(xintercept = as.numeric(as.Date("2015-10-01")), linetype = 2, size = 1.2, alpha = 0.5, color = "red") +
+  #geom_vline(xintercept = as.numeric(as.Date("2019-10-01")), linetype = 2, size = 1.2, alpha = 0.5, color = "red") +
+  #labs(x = "Date") +
+  labs(x = NULL) +
+  #labs(y = "Live Tissue (%)") +
+  labs(y = NULL) + 
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01", "2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(values = c("243" = "#5767be")) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust =.5, hjust = 0.5, size = 11, color = "black"), 
+    #axis.title.x = element_text(size = 14),
+    axis.text.y = element_text(size = 11, color = "black"),
+    axis.title.y = element_text(size = 11),
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+tag243
+```
+
+####Tag 245
+```{r}
+tag245 = ggplot(data = only245, aes(x = Date, y = PercentLiveTissue, group = Colony, color = Colony)) +
+  geom_point(size = 1.15) +
+  geom_line(size = 0.8) +
+  geom_area(fill = "#5767be", alpha = 0.5) + 
+  #geom_vline(xintercept = as.numeric(as.Date("2015-10-01")), linetype = 2, size = 1.2, alpha = 0.5, color = "red") +
+  #geom_vline(xintercept = as.numeric(as.Date("2019-10-01")), linetype = 2, size = 1.2, alpha = 0.5, color = "red") +
+  #labs(x = "Date") +
+  #labs(y = "Live Tissue (%)") +
+  labs(x = NULL) +
+  labs(y = NULL) +
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01",  "2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(values = c("245" = "#5767be")) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust =.5, hjust = 0.5, size = 11, color = "black"),
+    axis.title.x = element_text(size = 14),
+    #axis.text.x = element_blank(), 
+    #axis.text.y = element_text(size = 12),
+    #axis.title.y = element_text(size = 14,),
+    axis.text.y = element_blank(), 
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+tag245
+```
+
+####Tag 247
+```{r}
+tag247 = ggplot(data = only247, aes(x = Date, y = PercentLiveTissue, group = Colony, color = Colony)) +
+  geom_point(size = 1.15) +
+  geom_line(size = 0.8) +
+  geom_area(fill = "#5767be", alpha = 0.5) + 
+  #geom_vline(xintercept = as.numeric(as.Date("2015-10-01")), linetype = 2, size = 1.2, alpha = 0.5, color = "red") +
+  #geom_vline(xintercept = as.numeric(as.Date("2019-10-01")), linetype = 2, size = 1.2, alpha = 0.5, color = "red") +
+  #labs(x = "Date") +
+  labs(x = NULL) + 
+  #labs(y = "Live Tissue (%)") +
+  labs(y = NULL) +
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01", "2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(values = c("247" = "#5767be")) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust =.5, hjust = 0.5, size = 11, color = "black"),
+    #axis.title.x = element_text(size = 14),
+    #axis.text.x = element_blank(), 
+    #axis.text.y = element_text(size = 10),
+    #axis.title.y = element_text(size = 14,),
+    axis.text.y = element_blank(), 
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+tag247
+```
+
+###Grid
+```{r}
+require(grid)
+figure = ggarrange(tag43, tag45, tag225, tag241, tag243, tag245, tag247, ncol = 4, nrow = 2, widths = c(1.40, 1.24, 1.24, 1.24), heights = c(1.0, 1.18), legend = "none")
+figure
+
+figure = annotate_figure(figure, left = textGrob("Live Tissue (%)", rot = 90, vjust = 0.7, gp = gpar(cex = 1)),
+                    bottom = textGrob("Date", gp = gpar(cex = 1)))
+figure
+
+png("PcomMortality figure.png",
+    width = 6.5,
+    height = 4.5,
+    units = "in",
+    res = 300)
+
+figure
+
+dev.off()
+```
+
+##SEM for percent live tissue and recovery times
+```{r}
+LiveTissueSEM = c(45, 66, 52, 43, 56, 78)
+std.error(LiveTissueSEM)
+
+RecoverySEM = c(37, 9, 17, 40, 17, 15)
+std.error(RecoverySEM)
+
+MortalitySEM = c(11,57,55,34,48,44,25)
+std.error(MortalitySEM)
+```
+
+#Mcap
+##Import data
+```{r}
+#Import the csv that contains ROI areas and calculated percentages of dead and alive
+McapMortality = read.csv("/Users/katelynjones/Box\ Sync/grp-sas-bio-barottlab/Data/KBay\ coral\ pairs\ and\ temp\ time\ series/Phoenix\ Effect/Data\ sheets\ and\ Code/PhoenixEffectMortalityScores_Mcap.csv")
+```
+
+##Clean data
+```{r}
+#Simplify data sheet to include only relevant information for each timepoint
+
+#First, remove all rows that include NA (represents individual ROIs)
+McapMortality = na.omit(McapMortality)
+
+#Remove all columns except Colony, Date, Total.Area, Dead.Area, X..Live.Tissue (% Live Tissue)
+McapMortality = subset(McapMortality, select = -c(Alive.Dead, ROI, Area, Mean, Min, Max))
+
+#Rename columns 
+colnames(McapMortality)[3] <- "TotalArea" #Total.Area
+colnames(McapMortality)[4] <- "DeadArea" #Dead.Area
+colnames(McapMortality)[5] <- "PercentLiveTissue" #X..Live.Tissue
+
+#Change the Date column from a character to a specific date format
+McapMortality$Date = as.Date(McapMortality$Date, "%Y-%m-%d")
+
+#Change ratio to a percent
+McapMortality$PercentLiveTissue = McapMortality$PercentLiveTissue*100 
+
+#Round percent to nearest whole number 
+McapMortality$PercentLiveTissue = round(McapMortality$PercentLiveTissue, 0)
+
+#Removing unnecessary columns
+McapMortality = subset(McapMortality, select = -c(TotalArea, DeadArea))
+```
+
+##[Removed] Consolidate time points
+```{r}
+#Creating new columns that contain just the month and the year to begin consolidating time points
+#McapMortality$Month <- format(as.Date(McapMortality$Date, format="%Y/%m/%d"),"%m") #month
+#McapMortality$Year <- format(as.Date(McapMortality$Date, format="%Y/%m/%d"),"%Y") #Year
+
+#Rearranging columns to place date indicators next to each other
+#McapMortality = McapMortality %>% 
+ # select(-PercentLiveTissue, PercentLiveTissue)
+
+#Combine September 2015 and October 2015
+#oct2015 = McapMortality %>%
+ # filter(Year == "2015", Month == "09")  #subsets just data points in Sept 2015
+
+#oct2015$Month = "10" #manually changing the month to 10 (October) 
+
+#Remove old Sept 2015 time points
+#McapMortality = subset(McapMortality, Date != "2015-09-24")
+
+#unique(McapMortality$Date)
+
+#Add on new Oct 2015 data points to rest of data set
+#McapMortality = rbind(McapMortality,oct2015) #worked
+
+#Create cols with Month and Year
+#cols = c("Month", "Year")
+
+#Combine both columns
+#McapMortality$Date <- do.call(paste, c(McapMortality[cols], sep="-")) #character format
+
+
+#Once again reorganizing column order to put response variable on the end
+#McapMortality = McapMortality %>% 
+  #select(-PercentLiveTissue, PercentLiveTissue)
+
+#Removing Nov 2020, only have data points for 2 colonies, which is repeated in later time points with no difference
+#McapMortality = subset(McapMortality, Date != "11-2020")
+#unique(McapMortality$Date) #checked that it was successfully removed
+
+#Remove unecessary columns in mortality
+#McapMortality = subset(McapMortality, select = -c(Date, Month, Year))
+
+#To get mortality to sort in chronological order, I have to change NewDate from character -> Date format. Going to do this by adding in a "dummy" day variable (the first of the month)
+#McapMortality$NewDate = as.Date(paste("01", McapMortality$NewDate, sep="-"), "%d-%m-%Y")
+```
+
+##Table summary
+```{r}
+table = McapMortality %>% 
+    pivot_wider(names_from = Colony, values_from = PercentLiveTissue)
+table = dplyr::arrange(table, Date)
+
+write.csv(table, "NewTable.csv")
+
+#Edit: table will now be mortality (%) instead of live tissue (%). I will edit the mortality data frame (in a new version) to be the mortality rather than % live remaining by taking 100 - [value]. 
+
+MortalityTable = McapMortality %>%
+  mutate(PercentLiveTissue = (PercentLiveTissue-100)*-1) #creates mortality metric
+
+Mortalitytable = MortalityTable %>% 
+    pivot_wider(names_from = Colony, values_from = PercentLiveTissue)
+Mortalitytable = dplyr::arrange(Mortalitytable, Date)
+
+write.csv(Mortalitytable, "MortalityTable.csv")
+```
+
+##Plots
+
+###Tag 1
+```{r}
+McapMortality$Colony = as.factor(McapMortality$Colony)
+
+only1 = subset(McapMortality, Colony == "1")
+
+tag1 = ggplot(data = only1, aes(x = Date, y = PercentLiveTissue, group = Colony, color = Colony)) +
+  geom_point(size = 1.15) +
+  geom_line(size = 0.8) +
+  geom_area(fill = "#5767be", alpha = 0.5) + 
+  #labs(x = "Date") +
+  labs(x = NULL) + 
+  #labs(y = "Live Tissue (%)") +
+  labs(y = NULL) + 
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01", "2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(values = c("1" = "#5767be")) +
+  theme_classic() +
+  theme(
+    #axis.text.x = element_text(size = 12), 
+    axis.text.x = element_text(angle = 90, vjust =.5, hjust = 0.5, size = 11, color = "black"),
+    #axis.text.x = element_blank(), 
+    axis.text.y = element_text(size = 11,
+                               color = "black"),
+    axis.title.y = element_text(size = 11),
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+tag1
+```
+
+###Tag 203
+```{r}
+only203 = subset(McapMortality, Colony == "203")
+
+tag203 = ggplot(data = only203, aes(x = Date, y = PercentLiveTissue, group = Colony, color = Colony)) +
+  geom_point(size = 1.15) +
+  geom_line(size = 0.8) +
+  geom_area(fill = "#5767be", alpha = 0.5) + 
+  #labs(x = "Date") +
+  labs(x = NULL) + 
+  #labs(y = "Live Tissue (%)") +
+  labs(y = NULL) + 
+  scale_x_date(date_breaks = "year", date_labels = "%Y", limits = as.Date(c("2015-06-01", "2022-12-31"))) +
+  scale_y_continuous(limits = c(0, 100)) +
+  scale_color_manual(values = c("203" = "#5767be")) +
+  theme_classic() +
+  theme(
+    #axis.text.x = element_text(size = 12), 
+    #axis.title.x = element_text(size = 14),
+    axis.text.x = element_text(angle = 90, vjust =.5, hjust = 0.5, size = 11, color = "black"),
+    #axis.text.y = element_text(size = 11,
+                          #     color = "black"),
+    #axis.title.y = element_text(size = 11),
+    axis.text.y = element_blank(), 
+    legend.position = "none", 
+    plot.title = element_text(colour="Black", size=16, hjust = 0.5, face = "bold")
+  )
+tag203
+```
+
+###Grid
+```{r}
+require(grid)
+figure = ggarrange(tag43, tag45, tag225, tag241, tag1, tag203, tag247, ncol = 4, nrow = 2, widths = c(1.40, 1.24, 1.24, 1.24), heights = c(1.0, 1.18), legend = "none")
+figure
+
+#figure = annotate_figure(figure, left = textGrob("Live Tissue (%)", rot = 90, vjust = 0.7, gp = gpar(cex = 1)),
+                    #bottom = textGrob("Date", gp = gpar(cex = 1)))
+#figure
+
+png("PcomMortality figure.png",
+    width = 6.5,
+    height = 4.5,
+    units = "in",
+    res = 300)
+
+figure
+
+dev.off()
+```
+
+
+
+
